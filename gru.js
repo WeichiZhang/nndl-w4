@@ -13,14 +13,14 @@ export class GRUModel {
             
             // First GRU layer
             this.model.add(tf.layers.gru({
-                units: 32, // Reduced for browser performance
+                units: 32,
                 returnSequences: true,
                 inputShape: this.inputShape
             }));
             
             // Second GRU layer
             this.model.add(tf.layers.gru({
-                units: 16, // Reduced for browser performance
+                units: 16,
                 returnSequences: false
             }));
             
@@ -47,7 +47,7 @@ export class GRUModel {
         }
     }
 
-    async train(X_train, y_train, X_test, y_test, epochs = 50, batchSize = 32) {
+    async train(X_train, y_train, X_test, y_test, epochs = 20, batchSize = 16) {
         try {
             console.log('Starting training...');
             this.history = await this.model.fit(X_train, y_train, {
@@ -56,7 +56,8 @@ export class GRUModel {
                 validationData: [X_test, y_test],
                 callbacks: {
                     onEpochEnd: (epoch, logs) => {
-                        console.log(`Epoch ${epoch + 1}: loss = ${logs.loss.toFixed(4)}, accuracy = ${logs.binaryAccuracy.toFixed(4)}`);
+                        const progress = `Epoch ${epoch + 1}/${epochs}: loss = ${logs.loss.toFixed(4)}, accuracy = ${logs.binaryAccuracy.toFixed(4)}`;
+                        console.log(progress);
                     }
                 }
             });
@@ -72,15 +73,6 @@ export class GRUModel {
             return await this.model.predict(X);
         } catch (error) {
             console.error('Prediction error:', error);
-            throw error;
-        }
-    }
-
-    evaluate(X_test, y_test) {
-        try {
-            return this.model.evaluate(X_test, y_test);
-        } catch (error) {
-            console.error('Evaluation error:', error);
             throw error;
         }
     }
