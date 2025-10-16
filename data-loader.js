@@ -162,11 +162,12 @@ export class StockDataLoader {
         const y_train = targets.slice(0, splitIndex);
         const y_test = targets.slice(splitIndex);
 
+        // Use tf.tensor instead of specific tensor functions
         return {
-            X_train: tf.tensor3d(X_train),
-            y_train: tf.tensor2d(y_train),
-            X_test: tf.tensor3d(X_test),
-            y_test: tf.tensor2d(y_test),
+            X_train: tf.tensor(X_train, [X_train.length, 12, 20]),
+            y_train: tf.tensor(y_train, [y_train.length, 30]),
+            X_test: tf.tensor(X_test, [X_test.length, 12, 20]),
+            y_test: tf.tensor(y_test, [y_test.length, 30]),
             symbols: this.stockSymbols
         };
     }
