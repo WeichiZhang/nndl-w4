@@ -29,43 +29,60 @@ export class StockDataLoader {
         const lines = csvText.trim().split('\n');
         const headers = lines[0].split(',').map(h => h.trim());
         
+        console.log('CSV Headers:', headers);
+        
         const rawData = [];
         for (let i = 1; i < lines.length; i++) {
             const values = lines[i].split(',').map(v => v.trim());
+            if (values.length !== headers.length) {
+                console.warn(`Skipping row ${i}: column count mismatch`);
+                continue;
+            }
+            
             const row = {};
             headers.forEach((header, idx) => {
                 row[header] = values[idx];
             });
             rawData.push(row);
         }
+        
+        console.log(`Parsed ${rawData.length} rows`);
         return rawData;
     }
 
     preprocessData(rawData) {
-        // Extract unique symbols and dates
-        this.stockSymbols = [...new Set(rawData.map(row => row.Symbol))];
-        const allDates = [...new Set(rawData.map(row => row.Date))].sort();
-        
-        // Pivot data: dates × (symbols × features)
-        const pivotedData = {};
-        allDates.forEach(date => {
-            pivotedData[date] = {};
-            this.stockSymbols.forEach(symbol => {
-                const row = rawData.find(r => r.Date === date && r.Symbol === symbol);
-                if (row) {
-                    pivotedData[date][symbol] = {
-                        Open: parseFloat(row.Open),
-                        Close: parseFloat(row.Close)
-                    };
-                }
-            });
-        });
+        try {
+            // Extract unique symbols and dates
+            this.stockSymbols = [...new Set(rawData.map(row => row.Symbol))].sort();
+            const allDates = [...new Set(rawData.map(row => row.Date))].sort();
+            
+            console.log(`Found ${this.stockSymbols.length} stocks:`, this.stockSymbols);
+            console.log(`Found ${allDates.length} dates`);
 
-        // Normalize per stock
-        this.normalizedData = this.minMaxNormalize(pivotedData, allDates);
-        this.dateIndex = allDates;
-        
-        return this.createSequences();
+            // Pivot data: dates × (symbols × features)
+            const pivotedData = {};
+            allDates.forEach(date => {
+                pivotedData[date] = {};
+                this.stockSymbols.forEach(symbol => {
+                    const row = rawData.find(r => r.Date === date && r.Symbol === symbol);
+                    if (row) {
+                        pivotedData[date][symbol] = {
+                            Open: parseFloat(row.Open),
+                            Close: parseFloat(row.Close)
+                        };
+                    }
+                });
+            });
+
+            // Normalize per stock
+            this.normalizedData = this.minMaxNormalize(pivotedData, allDates);
+            this.dateIndex = allDates;
+            
+            return this.createSequences();
+        } catch (error) {
+            console.error('Preprocessing error:', error);
+            throw error;
+        }
     }
 
     minMaxNormalize(pivotedData, dates) {
@@ -74,8 +91,14 @@ export class StockDataLoader {
 
         // Calculate min/max per stock
         this.stockSymbols.forEach(symbol => {
-            const opens = dates.map(date => pivotedData[date]?.[symbol]?.Open).filter(v => v);
-            const closes = dates.map(date => pivotedData[date]?.[symbol]?.Close).filter(v => v);
+            const opens = dates.map(date => pivotedData[date]?.[symbol]?.Open).filter(v => v !== undefined);
+            const closes = dates.map(date => pivotedData[date]?.[symbol]?.Close).filter(v => v !== undefined);
+            
+            if (opens.length === 0 || closes.length === 0) {
+                console.warn(`No data found for stock ${symbol}`);
+                stockStats[symbol] = { openMin: 0, openMax: 1, closeMin: 0, closeMax: 1 };
+                return;
+            }
             
             stockStats[symbol] = {
                 openMin: Math.min(...opens),
@@ -92,9 +115,13 @@ export class StockDataLoader {
                 const data = pivotedData[date]?.[symbol];
                 if (data) {
                     const stats = stockStats[symbol];
+                    // Avoid division by zero
+                    const openRange = stats.openMax - stats.openMin || 1;
+                    const closeRange = stats.closeMax - stats.closeMin || 1;
+                    
                     normalized[date][symbol] = {
-                        Open: (data.Open - stats.openMin) / (stats.openMax - stats.openMin),
-                        Close: (data.Close - stats.closeMin) / (stats.closeMax - stats.closeMin)
+                        Open: (data.Open - stats.openMin) / openRange,
+                        Close: (data.Close - stats.closeMin) / closeRange
                     };
                 }
             });
@@ -109,23 +136,28 @@ export class StockDataLoader {
         const sequenceLength = 12;
         const predictionHorizon = 3;
 
+        console.log('Creating sequences...');
+
         for (let i = 0; i < this.dateIndex.length - sequenceLength - predictionHorizon; i++) {
             const sequenceStart = i;
             const sequenceEnd = i + sequenceLength;
             const targetDate = this.dateIndex[sequenceEnd];
-            const predictionEnd = sequenceEnd + predictionHorizon;
 
             // Input sequence: 12 days × 20 features (10 stocks × [Open, Close])
             const sequence = [];
+            let validSequence = true;
+            
             for (let j = sequenceStart; j < sequenceEnd; j++) {
                 const date = this.dateIndex[j];
                 const features = [];
+                
                 this.stockSymbols.forEach(symbol => {
                     const stockData = this.normalizedData[date]?.[symbol];
                     if (stockData) {
                         features.push(stockData.Open, stockData.Close);
                     } else {
                         features.push(0, 0); // Padding for missing data
+                        validSequence = false;
                     }
                 });
                 sequence.push(features);
@@ -134,10 +166,12 @@ export class StockDataLoader {
             // Target: 30 binary values (10 stocks × 3 days)
             const target = [];
             const baseClosePrices = {};
+            
             this.stockSymbols.forEach(symbol => {
                 baseClosePrices[symbol] = this.normalizedData[targetDate]?.[symbol]?.Close || 0;
             });
 
+            let validTarget = true;
             for (let offset = 1; offset <= predictionHorizon; offset++) {
                 const futureDate = this.dateIndex[sequenceEnd + offset];
                 this.stockSymbols.forEach(symbol => {
@@ -146,16 +180,19 @@ export class StockDataLoader {
                     if (futureClose !== undefined && baseClose !== undefined) {
                         target.push(futureClose > baseClose ? 1 : 0);
                     } else {
-                        target.push(0); // Default for missing data
+                        target.push(0);
+                        validTarget = false;
                     }
                 });
             }
 
-            if (sequence.length === sequenceLength && target.length === 30) {
+            if (validSequence && validTarget && sequence.length === sequenceLength && target.length === 30) {
                 sequences.push(sequence);
                 targets.push(target);
             }
         }
+
+        console.log(`Created ${sequences.length} sequences`);
 
         // Split chronologically
         const splitIndex = Math.floor(sequences.length * this.trainTestSplit);
@@ -165,9 +202,8 @@ export class StockDataLoader {
         const y_test = targets.slice(splitIndex);
 
         console.log(`Training samples: ${X_train.length}, Test samples: ${X_test.length}`);
-        console.log(`Input shape: [samples, 12, 20], Output shape: [samples, 30]`);
 
-        // Use tf.tensor with explicit shapes instead of tf.tensor3d/tf.tensor2d
+        // Use tf.tensor with explicit shapes - this is the critical fix
         return {
             X_train: tf.tensor(X_train, [X_train.length, 12, 20]),
             y_train: tf.tensor(y_train, [y_train.length, 30]),
@@ -175,9 +211,5 @@ export class StockDataLoader {
             y_test: tf.tensor(y_test, [y_test.length, 30]),
             symbols: this.stockSymbols
         };
-    }
-
-    dispose() {
-        // Clean up tensors if needed
     }
 }
