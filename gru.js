@@ -8,92 +8,114 @@ export class GRUModel {
     }
 
     buildModel() {
-        this.model = tf.sequential();
-        
-        // First GRU layer
-        this.model.add(tf.layers.gru({
-            units: 64,
-            returnSequences: true,
-            inputShape: this.inputShape
-        }));
-        
-        // Second GRU layer
-        this.model.add(tf.layers.gru({
-            units: 32,
-            returnSequences: false
-        }));
-        
-        // Dropout for regularization
-        this.model.add(tf.layers.dropout({ rate: 0.2 }));
-        
-        // Output layer: 30 units for 10 stocks × 3 days
-        this.model.add(tf.layers.dense({
-            units: 30,
-            activation: 'sigmoid'
-        }));
+        try {
+            this.model = tf.sequential();
+            
+            // First GRU layer
+            this.model.add(tf.layers.gru({
+                units: 32, // Reduced for browser performance
+                returnSequences: true,
+                inputShape: this.inputShape
+            }));
+            
+            // Second GRU layer
+            this.model.add(tf.layers.gru({
+                units: 16, // Reduced for browser performance
+                returnSequences: false
+            }));
+            
+            // Dropout for regularization
+            this.model.add(tf.layers.dropout({ rate: 0.2 }));
+            
+            // Output layer: 30 units for 10 stocks × 3 days
+            this.model.add(tf.layers.dense({
+                units: 30,
+                activation: 'sigmoid'
+            }));
 
-        this.model.compile({
-            optimizer: 'adam',
-            loss: 'binaryCrossentropy',
-            metrics: ['binaryAccuracy']
-        });
+            this.model.compile({
+                optimizer: 'adam',
+                loss: 'binaryCrossentropy',
+                metrics: ['binaryAccuracy']
+            });
 
-        return this.model.summary();
+            console.log('Model built successfully');
+            return this.model.summary();
+        } catch (error) {
+            console.error('Model building error:', error);
+            throw error;
+        }
     }
 
-    async train(X_train, y_train, X_test, y_test, epochs = 100, batchSize = 32) {
-        this.history = await this.model.fit(X_train, y_train, {
-            epochs,
-            batchSize,
-            validationData: [X_test, y_test],
-            callbacks: {
-                onEpochEnd: (epoch, logs) => {
-                    console.log(`Epoch ${epoch}: loss = ${logs.loss}, accuracy = ${logs.binaryAccuracy}`);
-                    // Update UI progress here if needed
+    async train(X_train, y_train, X_test, y_test, epochs = 50, batchSize = 32) {
+        try {
+            console.log('Starting training...');
+            this.history = await this.model.fit(X_train, y_train, {
+                epochs,
+                batchSize,
+                validationData: [X_test, y_test],
+                callbacks: {
+                    onEpochEnd: (epoch, logs) => {
+                        console.log(`Epoch ${epoch + 1}: loss = ${logs.loss.toFixed(4)}, accuracy = ${logs.binaryAccuracy.toFixed(4)}`);
+                    }
                 }
-            }
-        });
+            });
+            console.log('Training completed');
+        } catch (error) {
+            console.error('Training error:', error);
+            throw error;
+        }
     }
 
     async predict(X) {
-        return this.model.predict(X);
+        try {
+            return await this.model.predict(X);
+        } catch (error) {
+            console.error('Prediction error:', error);
+            throw error;
+        }
     }
 
     evaluate(X_test, y_test) {
-        return this.model.evaluate(X_test, y_test);
+        try {
+            return this.model.evaluate(X_test, y_test);
+        } catch (error) {
+            console.error('Evaluation error:', error);
+            throw error;
+        }
     }
 
     computeStockAccuracy(predictions, yTrue, symbols) {
-        const predData = predictions.arraySync();
-        const trueData = yTrue.arraySync();
-        const stocksCount = symbols.length;
-        const daysAhead = 3;
-        
-        const stockAccuracies = {};
-        symbols.forEach((symbol, stockIdx) => {
-            let correct = 0;
-            let total = 0;
+        try {
+            const predData = predictions.arraySync();
+            const trueData = yTrue.arraySync();
+            const stocksCount = symbols.length;
+            const daysAhead = 3;
             
-            for (let sample = 0; sample < predData.length; sample++) {
-                for (let day = 0; day < daysAhead; day++) {
-                    const predIdx = stockIdx + day * stocksCount;
-                    const pred = predData[sample][predIdx] > 0.5 ? 1 : 0;
-                    const trueVal = trueData[sample][predIdx];
-                    
-                    if (pred === trueVal) correct++;
-                    total++;
+            const stockAccuracies = {};
+            symbols.forEach((symbol, stockIdx) => {
+                let correct = 0;
+                let total = 0;
+                
+                for (let sample = 0; sample < predData.length; sample++) {
+                    for (let day = 0; day < daysAhead; day++) {
+                        const predIdx = stockIdx + day * stocksCount;
+                        const pred = predData[sample][predIdx] > 0.5 ? 1 : 0;
+                        const trueVal = trueData[sample][predIdx];
+                        
+                        if (pred === trueVal) correct++;
+                        total++;
+                    }
                 }
-            }
+                
+                stockAccuracies[symbol] = total > 0 ? correct / total : 0;
+            });
             
-            stockAccuracies[symbol] = correct / total;
-        });
-        
-        return stockAccuracies;
-    }
-
-    async saveModel() {
-        const saveResult = await this.model.save('downloads://stock-gru-model');
-        return saveResult;
+            return stockAccuracies;
+        } catch (error) {
+            console.error('Accuracy computation error:', error);
+            return {};
+        }
     }
 
     dispose() {
