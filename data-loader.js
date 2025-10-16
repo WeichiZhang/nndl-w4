@@ -151,8 +151,10 @@ export class StockDataLoader {
                 });
             }
 
-            sequences.push(sequence);
-            targets.push(target);
+            if (sequence.length === sequenceLength && target.length === 30) {
+                sequences.push(sequence);
+                targets.push(target);
+            }
         }
 
         // Split chronologically
@@ -162,7 +164,10 @@ export class StockDataLoader {
         const y_train = targets.slice(0, splitIndex);
         const y_test = targets.slice(splitIndex);
 
-        // Use tf.tensor instead of specific tensor functions
+        console.log(`Training samples: ${X_train.length}, Test samples: ${X_test.length}`);
+        console.log(`Input shape: [samples, 12, 20], Output shape: [samples, 30]`);
+
+        // Use tf.tensor with explicit shapes instead of tf.tensor3d/tf.tensor2d
         return {
             X_train: tf.tensor(X_train, [X_train.length, 12, 20]),
             y_train: tf.tensor(y_train, [y_train.length, 30]),
@@ -170,5 +175,9 @@ export class StockDataLoader {
             y_test: tf.tensor(y_test, [y_test.length, 30]),
             symbols: this.stockSymbols
         };
+    }
+
+    dispose() {
+        // Clean up tensors if needed
     }
 }
