@@ -3,8 +3,6 @@ import * as tf from 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/t
 export class StockDataLoader {
     constructor() {
         this.stockSymbols = [];
-        this.dateIndex = [];
-        this.normalizedData = null;
         this.trainTestSplit = 0.8;
     }
 
@@ -27,48 +25,29 @@ export class StockDataLoader {
 
     parseCSV(csvText) {
         const lines = csvText.trim().split('\n');
-        if (lines.length < 2) {
-            throw new Error('CSV file is empty or has only headers');
-        }
-
-        const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
-        console.log('CSV Headers:', headers);
-
-        // Check required columns
-        const requiredColumns = ['Date', 'Symbol', 'Open', 'Close'];
-        const missingColumns = requiredColumns.filter(col => !headers.includes(col));
-        if (missingColumns.length > 0) {
-            throw new Error(`Missing required columns: ${missingColumns.join(', ')}`);
-        }
+        console.log('Total lines:', lines.length);
+        
+        const headers = lines[0].split(',').map(h => h.trim());
+        console.log('Headers:', headers);
 
         const rawData = [];
-        for (let i = 1; i < lines.length; i++) {
-            const line = lines[i].trim();
-            if (!line) continue;
-
-            const values = line.split(',').map(v => v.trim().replace(/"/g, ''));
-            if (values.length !== headers.length) {
-                console.warn(`Skipping row ${i}: column count mismatch`);
-                continue;
+        for (let i = 1; i < Math.min(lines.length, 100); i++) { // Process only first 100 rows for testing
+            const values = lines[i].split(',').map(v => v.trim());
+            if (values.length === headers.length) {
+                const row = {};
+                headers.forEach((header, idx) => {
+                    row[header] = values[idx];
+                });
+                
+                // Convert numeric values
+                if (row.Open && row.Close && row.Symbol) {
+                    row.Open = parseFloat(row.Open);
+                    row.Close = parseFloat(row.Close);
+                    if (!isNaN(row.Open) && !isNaN(row.Close)) {
+                        rawData.push(row);
+                    }
+                }
             }
-
-            const row = {};
-            headers.forEach((header, idx) => {
-                row[header] = values[idx];
-            });
-
-            // Validate numeric values
-            const openVal = parseFloat(row.Open);
-            const closeVal = parseFloat(row.Close);
-            
-            if (isNaN(openVal) || isNaN(closeVal)) {
-                console.warn(`Skipping row ${i}: invalid numeric values`);
-                continue;
-            }
-
-            row.Open = openVal;
-            row.Close = closeVal;
-            rawData.push(row);
         }
 
         console.log(`Parsed ${rawData.length} valid rows`);
@@ -76,145 +55,78 @@ export class StockDataLoader {
     }
 
     preprocessData(rawData) {
-        if (!rawData || rawData.length === 0) {
-            throw new Error('No valid data to process');
-        }
-
-        // Extract unique symbols and dates
-        this.stockSymbols = [...new Set(rawData.map(row => row.Symbol))].sort();
-        const allDates = [...new Set(rawData.map(row => row.Date))].sort();
+        console.log('Starting preprocessing...');
         
-        console.log(`Found ${this.stockSymbols.length} stocks:`, this.stockSymbols);
-        console.log(`Found ${allDates.length} dates`);
+        // Get unique symbols
+        this.stockSymbols = [...new Set(rawData.map(row => row.Symbol))].slice(0, 10); // Limit to 10 stocks
+        console.log('Stocks:', this.stockSymbols);
 
-        if (this.stockSymbols.length === 0) {
-            throw new Error('No stock symbols found in data');
-        }
-
-        // Pivot data: dates × (symbols × features)
-        const pivotedData = {};
-        allDates.forEach(date => {
-            pivotedData[date] = {};
-            this.stockSymbols.forEach(symbol => {
-                const row = rawData.find(r => r.Date === date && r.Symbol === symbol);
-                if (row) {
-                    pivotedData[date][symbol] = {
-                        Open: row.Open,
-                        Close: row.Close
-                    };
-                }
-            });
-        });
-
-        // Normalize per stock
-        this.normalizedData = this.minMaxNormalize(pivotedData, allDates);
-        this.dateIndex = allDates;
-        
-        const sequences = this.createSequences();
-        console.log('Preprocessing completed successfully');
-        return sequences;
-    }
-
-    minMaxNormalize(pivotedData, dates) {
-        const normalized = {};
-        const stockStats = {};
-
-        // Calculate min/max per stock
-        this.stockSymbols.forEach(symbol => {
-            const opens = dates.map(date => pivotedData[date]?.[symbol]?.Open).filter(v => v !== undefined && !isNaN(v));
-            const closes = dates.map(date => pivotedData[date]?.[symbol]?.Close).filter(v => v !== undefined && !isNaN(v));
-            
-            if (opens.length === 0 || closes.length === 0) {
-                console.warn(`No valid data found for stock ${symbol}`);
-                stockStats[symbol] = { openMin: 0, openMax: 1, closeMin: 0, closeMax: 1 };
-                return;
+        // Group by date
+        const dataByDate = {};
+        rawData.forEach(row => {
+            if (!dataByDate[row.Date]) {
+                dataByDate[row.Date] = {};
             }
-            
-            stockStats[symbol] = {
-                openMin: Math.min(...opens),
-                openMax: Math.max(...opens),
-                closeMin: Math.min(...closes),
-                closeMax: Math.max(...closes)
+            dataByDate[row.Date][row.Symbol] = {
+                Open: row.Open,
+                Close: row.Close
             };
         });
 
-        // Apply normalization
-        dates.forEach(date => {
-            normalized[date] = {};
-            this.stockSymbols.forEach(symbol => {
-                const data = pivotedData[date]?.[symbol];
-                if (data) {
-                    const stats = stockStats[symbol];
-                    // Avoid division by zero
-                    const openRange = stats.openMax - stats.openMin || 1;
-                    const closeRange = stats.closeMax - stats.closeMin || 1;
-                    
-                    normalized[date][symbol] = {
-                        Open: (data.Open - stats.openMin) / openRange,
-                        Close: (data.Close - stats.closeMin) / closeRange
-                    };
-                }
-            });
-        });
+        // Get sorted dates
+        const dates = Object.keys(dataByDate).sort();
+        console.log('Total dates:', dates.length);
 
-        return normalized;
-    }
-
-    createSequences() {
+        // Create simple sequences (bypass complex normalization for now)
         const sequences = [];
         const targets = [];
-        const sequenceLength = 12;
-        const predictionHorizon = 3;
-
-        console.log('Creating sequences...');
-
-        for (let i = 0; i < this.dateIndex.length - sequenceLength - predictionHorizon; i++) {
-            const sequenceStart = i;
-            const sequenceEnd = i + sequenceLength;
-            const targetDate = this.dateIndex[sequenceEnd];
-
-            // Input sequence: 12 days × 20 features (10 stocks × [Open, Close])
+        
+        // Use only recent data to ensure we have enough sequences
+        const recentDates = dates.slice(-100); // Last 100 days
+        
+        for (let i = 12; i < recentDates.length - 3; i++) {
             const sequence = [];
-            let validSequence = true;
+            let valid = true;
             
-            for (let j = sequenceStart; j < sequenceEnd; j++) {
-                const date = this.dateIndex[j];
+            // Create input sequence (last 12 days)
+            for (let j = i - 12; j < i; j++) {
+                const date = recentDates[j];
                 const features = [];
                 
-                this.stockSymbols.forEach(symbol => {
-                    const stockData = this.normalizedData[date]?.[symbol];
-                    if (stockData) {
-                        features.push(stockData.Open, stockData.Close);
+                for (const symbol of this.stockSymbols) {
+                    const data = dataByDate[date]?.[symbol];
+                    if (data) {
+                        // Simple normalization: divide by 1000 to get values ~0-1
+                        features.push(data.Open / 1000, data.Close / 1000);
                     } else {
                         features.push(0, 0);
-                        console.warn(`Missing data for ${symbol} on ${date}`);
+                        valid = false;
                     }
-                });
+                }
                 sequence.push(features);
             }
 
-            // Target: 30 binary values (10 stocks × 3 days)
-            const target = [];
-            const baseClosePrices = {};
-            
-            this.stockSymbols.forEach(symbol => {
-                baseClosePrices[symbol] = this.normalizedData[targetDate]?.[symbol]?.Close || 0;
-            });
+            // Create target (next 3 days)
+            if (valid) {
+                const target = [];
+                const currentDate = recentDates[i];
+                const currentPrices = {};
+                
+                // Get current prices for comparison
+                for (const symbol of this.stockSymbols) {
+                    currentPrices[symbol] = dataByDate[currentDate]?.[symbol]?.Close || 0;
+                }
 
-            for (let offset = 1; offset <= predictionHorizon; offset++) {
-                const futureDate = this.dateIndex[sequenceEnd + offset];
-                this.stockSymbols.forEach(symbol => {
-                    const futureClose = this.normalizedData[futureDate]?.[symbol]?.Close;
-                    const baseClose = baseClosePrices[symbol];
-                    if (futureClose !== undefined && baseClose !== undefined) {
-                        target.push(futureClose > baseClose ? 1 : 0);
-                    } else {
-                        target.push(0);
+                // Check next 3 days
+                for (let offset = 1; offset <= 3; offset++) {
+                    const futureDate = recentDates[i + offset];
+                    for (const symbol of this.stockSymbols) {
+                        const futurePrice = dataByDate[futureDate]?.[symbol]?.Close || 0;
+                        const currentPrice = currentPrices[symbol];
+                        target.push(futurePrice > currentPrice ? 1 : 0);
                     }
-                });
-            }
+                }
 
-            if (sequence.length === sequenceLength && target.length === 30) {
                 sequences.push(sequence);
                 targets.push(target);
             }
@@ -222,20 +134,15 @@ export class StockDataLoader {
 
         console.log(`Created ${sequences.length} sequences`);
 
-        if (sequences.length === 0) {
-            throw new Error('No valid sequences created - check data quality');
-        }
-
-        // Split chronologically
+        // Split data
         const splitIndex = Math.floor(sequences.length * this.trainTestSplit);
         const X_train = sequences.slice(0, splitIndex);
         const X_test = sequences.slice(splitIndex);
         const y_train = targets.slice(0, splitIndex);
         const y_test = targets.slice(splitIndex);
 
-        console.log(`Training samples: ${X_train.length}, Test samples: ${X_test.length}`);
+        console.log(`Training: ${X_train.length}, Test: ${X_test.length}`);
 
-        // Create tensors
         return {
             X_train: tf.tensor(X_train, [X_train.length, 12, 20]),
             y_train: tf.tensor(y_train, [y_train.length, 30]),
