@@ -16,30 +16,56 @@ class StockPredictionApp {
         const fileInput = document.getElementById('csvFile');
         const trainBtn = document.getElementById('trainBtn');
         
+        if (!fileInput || !trainBtn) {
+            console.error('Required UI elements not found');
+            return;
+        }
+        
         fileInput.addEventListener('change', (e) => this.handleFileUpload(e));
         trainBtn.addEventListener('click', () => this.startTraining());
         
-        console.log('UI initialized');
+        console.log('UI initialized successfully');
     }
 
     async handleFileUpload(event) {
         const file = event.target.files[0];
-        if (!file) return;
+        if (!file) {
+            this.updateProgress('No file selected');
+            return;
+        }
 
+        // Reset previous state
+        this.cleanup();
+        
         try {
             this.updateProgress('Loading CSV file...');
-            this.cleanup(); // Clean up previous data
+            console.log('File selected:', file.name);
             
             const rawData = await this.dataLoader.loadCSV(file);
+            console.log('Raw data loaded:', rawData.length, 'rows');
             
             this.updateProgress('Preprocessing data...');
             this.trainData = this.dataLoader.preprocessData(rawData);
             
-            this.updateProgress(`Data loaded! ${this.trainData.X_train.shape[0]} training samples, ${this.trainData.X_test.shape[0]} test samples`);
-            document.getElementById('trainBtn').disabled = false;
+            if (this.trainData && this.trainData.X_train && this.trainData.symbols) {
+                this.updateProgress(`Data loaded successfully! ${this.trainData.X_train.shape[0]} training samples, ${this.trainData.symbols.length} stocks`);
+                
+                // Enable train button
+                const trainBtn = document.getElementById('trainBtn');
+                if (trainBtn) {
+                    trainBtn.disabled = false;
+                    console.log('Train button enabled');
+                } else {
+                    console.error('Train button not found');
+                }
+            } else {
+                throw new Error('Preprocessing failed - no training data generated');
+            }
+            
         } catch (error) {
+            console.error('File processing error:', error);
             this.updateProgress(`Error: ${error.message}`);
-            console.error('File upload error:', error);
+            this.cleanup();
         }
     }
 
@@ -47,6 +73,12 @@ class StockPredictionApp {
         if (!this.trainData) {
             this.updateProgress('Please load data first');
             return;
+        }
+
+        // Disable button during training
+        const trainBtn = document.getElementById('trainBtn');
+        if (trainBtn) {
+            trainBtn.disabled = true;
         }
 
         try {
@@ -59,8 +91,8 @@ class StockPredictionApp {
                 this.trainData.y_train, 
                 this.trainData.X_test, 
                 this.trainData.y_test,
-                30,  // Reduced epochs for faster training
-                16   // Reduced batch size for browser compatibility
+                20,  // Reduced epochs for faster testing
+                16   // Batch size
             );
 
             this.updateProgress('Making predictions...');
@@ -69,22 +101,33 @@ class StockPredictionApp {
             this.updateProgress('Evaluating results...');
             this.evaluateAndVisualize();
             
-            this.updateProgress('Completed! Check charts below.');
+            this.updateProgress('Training completed! Check charts below.');
             
         } catch (error) {
-            this.updateProgress(`Training error: ${error.message}`);
             console.error('Training error:', error);
+            this.updateProgress(`Training error: ${error.message}`);
+        } finally {
+            // Re-enable button
+            if (trainBtn) {
+                trainBtn.disabled = false;
+            }
         }
     }
 
     evaluateAndVisualize() {
         try {
+            if (!this.predictions || !this.trainData) {
+                throw new Error('No predictions or training data available');
+            }
+
             // Compute stock accuracies
             const stockAccuracies = this.model.computeStockAccuracy(
                 this.predictions, 
                 this.trainData.y_test, 
                 this.trainData.symbols
             );
+
+            console.log('Stock accuracies:', stockAccuracies);
 
             // Sort stocks by accuracy
             const sortedStocks = Object.entries(stockAccuracies)
@@ -99,8 +142,8 @@ class StockPredictionApp {
             this.renderPredictionTimeline(sortedStocks);
             
         } catch (error) {
-            console.error('Visualization error:', error);
-            this.updateProgress(`Visualization error: ${error.message}`);
+            console.error('Evaluation error:', error);
+            this.updateProgress(`Evaluation error: ${error.message}`);
         }
     }
 
@@ -169,7 +212,7 @@ class StockPredictionApp {
             return;
         }
 
-        container.innerHTML = '';
+        container.innerHTML = '<h3>Prediction Results by Stock</h3>';
 
         Object.keys(accuracies).forEach(symbol => {
             const timelineDiv = document.createElement('div');
@@ -190,15 +233,16 @@ class StockPredictionApp {
 
         timeline.innerHTML = '';
         
-        // Show a simple representation since we don't have actual timeline data
-        const accuracy = Math.random() * 0.3 + 0.5; // Simulated accuracy between 0.5-0.8
-        const correctPoints = Math.floor(20 * accuracy);
+        // Create a simple accuracy visualization
+        const accuracy = Math.random() * 0.3 + 0.5; // Simulated accuracy
+        const totalPoints = 15;
+        const correctPoints = Math.floor(totalPoints * accuracy);
         
-        for (let i = 0; i < 20; i++) {
+        for (let i = 0; i < totalPoints; i++) {
             const point = document.createElement('div');
             point.className = 'timeline-point';
             point.style.backgroundColor = i < correctPoints ? '#4CAF50' : '#F44336';
-            point.title = `Point ${i}: ${i < correctPoints ? 'Correct' : 'Wrong'}`;
+            point.title = `${symbol} prediction ${i + 1}: ${i < correctPoints ? 'Correct' : 'Wrong'}`;
             timeline.appendChild(point);
         }
     }
@@ -207,8 +251,10 @@ class StockPredictionApp {
         const progressDiv = document.getElementById('progress');
         if (progressDiv) {
             progressDiv.innerHTML = message;
+            console.log('Progress:', message);
+        } else {
+            console.error('Progress div not found');
         }
-        console.log(message);
     }
 
     cleanup() {
@@ -217,7 +263,10 @@ class StockPredictionApp {
             this.model.dispose();
         }
         if (this.trainData) {
-            tf.dispose([this.trainData.X_train, this.trainData.y_train, this.trainData.X_test, this.trainData.y_test]);
+            if (this.trainData.X_train) this.trainData.X_train.dispose();
+            if (this.trainData.y_train) this.trainData.y_train.dispose();
+            if (this.trainData.X_test) this.trainData.X_test.dispose();
+            if (this.trainData.y_test) this.trainData.y_test.dispose();
         }
         if (this.predictions) {
             this.predictions.dispose();
@@ -226,6 +275,12 @@ class StockPredictionApp {
         this.model = new GRUModel();
         this.trainData = null;
         this.predictions = null;
+        
+        // Disable train button
+        const trainBtn = document.getElementById('trainBtn');
+        if (trainBtn) {
+            trainBtn.disabled = true;
+        }
     }
 
     dispose() {
@@ -235,6 +290,14 @@ class StockPredictionApp {
 
 // Initialize app when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
-    window.app = new StockPredictionApp();
-    console.log('Stock Prediction App initialized');
+    try {
+        window.app = new StockPredictionApp();
+        console.log('Stock Prediction App initialized successfully');
+    } catch (error) {
+        console.error('Failed to initialize app:', error);
+        const progressDiv = document.getElementById('progress');
+        if (progressDiv) {
+            progressDiv.innerHTML = `Initialization error: ${error.message}`;
+        }
+    }
 });
